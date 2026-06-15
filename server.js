@@ -4,7 +4,6 @@ const http = require('http');
 const server = http.createServer(app);
 const cors = require('cors');
 const { Server } = require('socket.io');
-
 app.use(cors());
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -13,21 +12,19 @@ const rooms = {};
 io.on('connection', (socket) => {
     socket.on('create-room', (data) => {
         const roomCode = Math.floor(1000 + Math.random() * 9000).toString();
-        rooms[roomCode] = { players: [data.user] };
+        rooms[roomCode] = { 
+            config: { points: data.points, balls: data.balls, p2Name: data.user, p1Name: '相手' } 
+        };
         socket.join(roomCode);
         socket.emit('room-created', roomCode);
     });
 
     socket.on('join-room', (data) => {
         if (rooms[data.room]) {
-            socket.join(data.room);
-            io.to(data.room).emit('game-start');
+            const config = rooms[data.room].config;
+            config.p1Name = data.user; // 参加者の名前をセット
+            io.to(data.room).emit('game-start', config);
         }
-    });
-
-    // パドルの位置などを同期する用（今後追加）
-    socket.on('paddle-move', (data) => {
-        socket.to(data.room).emit('opponent-paddle', data.y);
     });
 });
 
