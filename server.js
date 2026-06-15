@@ -2,23 +2,24 @@ const express = require('express');
 const app = express();
 const http = require('http');
 const server = http.createServer(app);
-const { Server } = require('socket.io');
+const cors = require('cors');
 
-// CORS設定を明示的に許可
+app.use(cors());
+
+const { Server } = require('socket.io');
 const io = new Server(server, {
-    cors: { origin: "*" }
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
 });
 
 io.on('connection', (socket) => {
-    console.log('★サーバー接続成功！ ID:', socket.id);
-    
-    socket.on('broadcast-test', (data) => {
-        console.log('メッセージ受信:', data);
-        io.emit('server-echo', `「${data}」をサーバー経由で受け取ったよ！`);
+    console.log('Client connected:', socket.id);
+    socket.on('test-message', (data) => {
+        io.emit('test-broadcast', data);
     });
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => {
-    console.log(`サーバー起動中... ポート: ${PORT}`);
-});
+server.listen(PORT, () => console.log(`API Server running on port ${PORT}`));
