@@ -10,7 +10,7 @@ const io = new Server(server, {
 });
 
 const rooms = {};
-const MAX_SPEED = 10; // ご要望通り、最高速度を10に制限！
+const MAX_SPEED = 10; // 最高速度10制限
 
 io.on('connection', (socket) => {
 
@@ -28,7 +28,7 @@ io.on('connection', (socket) => {
             balls: [],
             intervalId: null
         };
-        socket.roomCode = code; // このソケット接続に部屋コードを記憶
+        socket.roomCode = code;
         socket.join(code);
         socket.emit('roomCreated', { code: code });
     });
@@ -48,7 +48,7 @@ io.on('connection', (socket) => {
         }
 
         room.p2 = { id: socket.id, name: data.name, y: 160, ready: false };
-        socket.roomCode = code; // このソケット接続に部屋コードを記憶
+        socket.roomCode = code;
         socket.join(code);
 
         socket.emit('roomJoined', { code: code });
@@ -82,14 +82,14 @@ io.on('connection', (socket) => {
         if (room.p2 && socket.id === room.p2.id) room.p2.y = data.y;
     });
 
-    // 5. 切断・退出ハンドリング（超強化版）
+    // 5. 切断・退出ハンドリング（io.toに修正して確実に通知）
     const handleLeave = () => {
         const code = socket.roomCode;
         const room = rooms[code];
         if (room) {
             clearInterval(room.intervalId);
-            // 切断した本人"以外"の全員に、切断による強制終了を通知
-            socket.to(code).emit('opponentLeft', "対戦相手が切断したため、ロビーに戻ります。");
+            // 部屋全体に通知を送る（これで残された側に100%届きます）
+            io.to(code).emit('opponentLeft', "対戦相手が切断したため、ロビーに戻ります。");
             delete rooms[code];
         }
     };
@@ -97,7 +97,6 @@ io.on('connection', (socket) => {
     socket.on('disconnect', handleLeave);
 });
 
-// ボール発射時に少し角度をつける
 function initRoomBalls(room) {
     room.balls = [];
     for (let i = 0; i < room.ballCount; i++) {
@@ -108,7 +107,6 @@ function initRoomBalls(room) {
     }
 }
 
-// オンライン物理演算
 function updateRoomGame(room) {
     if (room.gameState !== 'PLAYING') return;
 
@@ -121,21 +119,21 @@ function updateRoomGame(room) {
 
         if (b.y < 0 || b.y > 390) b.dy *= -1;
 
-        // 【厳密化】左パドル衝突（左に進んでいる時だけ、前面で綺麗に跳ね返す）
+        // 左パドル衝突
         if (b.x >= 10 && b.x <= 20 && b.dx < 0) {
             if (b.y >= room.p1.y - 10 && b.y <= room.p1.y + 80) {
                 let nextDx = Math.abs(b.dx) * 1.05;
                 b.dx = nextDx > MAX_SPEED ? MAX_SPEED : nextDx;
-                b.x = 21; // めり込み防止
+                b.x = 21;
             }
         }
         
-        // 【厳密化】右パドル衝突（右に進んでいる時だけ、前面で綺麗に跳ね返す）
+        // 右パドル衝突
         if (room.p2 && b.x >= 570 && b.x <= 580 && b.dx > 0) {
             if (b.y >= room.p2.y - 10 && b.y <= room.p2.y + 80) {
                 let nextDx = Math.abs(b.dx) * 1.05;
                 b.dx = nextDx > MAX_SPEED ? -MAX_SPEED : -nextDx;
-                b.x = 569; // めり込み防止
+                b.x = 569;
             }
         }
 
