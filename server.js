@@ -10,7 +10,7 @@ const io = new Server(server, {
 });
 
 const rooms = {};
-const MAX_SPEED = 10; // 最高速度10制限
+const MAX_SPEED = 10; // 最高速度は10でロック
 
 io.on('connection', (socket) => {
 
@@ -55,7 +55,7 @@ io.on('connection', (socket) => {
         io.to(code).emit('roomReady', { p1Name: room.p1.name, p2Name: room.p2.name });
     });
 
-    // 3. 準備完了ボタン
+    // 3. 準備完了
     socket.on('playerReady', () => {
         const room = rooms[socket.roomCode];
         if (!room) return;
@@ -82,13 +82,12 @@ io.on('connection', (socket) => {
         if (room.p2 && socket.id === room.p2.id) room.p2.y = data.y;
     });
 
-    // 5. 切断・退出ハンドリング（io.toに修正して確実に通知）
+    // 5. 切断・退出
     const handleLeave = () => {
         const code = socket.roomCode;
         const room = rooms[code];
         if (room) {
             clearInterval(room.intervalId);
-            // 部屋全体に通知を送る（これで残された側に100%届きます）
             io.to(code).emit('opponentLeft', "対戦相手が切断したため、ロビーに戻ります。");
             delete rooms[code];
         }
@@ -97,16 +96,19 @@ io.on('connection', (socket) => {
     socket.on('disconnect', handleLeave);
 });
 
+// ボール初期化（必ずスピード5から開始、最初から少し上下角をつける）
 function initRoomBalls(room) {
     room.balls = [];
     for (let i = 0; i < room.ballCount; i++) {
         const isLeft = Math.random() > 0.5;
-        const angle = (isLeft ? Math.PI : 0) + (Math.random() - 0.5) * 0.4;
-        const speed = 5;
+        // 初期角度を真横ではなく上下20度以内のランダムにする
+        const angle = (isLeft ? Math.PI : 0) + (Math.random() - 0.5) * 0.35;
+        const speed = 5; 
         room.balls.push({ x: 300, y: 200, dx: Math.cos(angle) * speed, dy: Math.sin(angle) * speed, active: true });
     }
 }
 
+// オンライン物理演算（角度シミュレーション版）
 function updateRoomGame(room) {
     if (room.gameState !== 'PLAYING') return;
 
@@ -117,24 +119,50 @@ function updateRoomGame(room) {
 
         b.x += b.dx; b.y += b.dy;
 
-        if (b.y < 0 || b.y > 390) b.dy *= -1;
+        // 壁反射
+        if (b.y < 0) { b.y = 0; b.dy *= -1; }
+        if (b.y > 390) { b.y = 390; b.dy *= -1; }
 
-        // 左パドル衝突
+        let hit = false;
+        let paddleY = 0;
+        let isLeftPaddle = true;
+
+        // 左パドル判定
         if (b.x >= 10 && b.x <= 20 && b.dx < 0) {
             if (b.y >= room.p1.y - 10 && b.y <= room.p1.y + 80) {
-                let nextDx = Math.abs(b.dx) * 1.05;
-                b.dx = nextDx > MAX_SPEED ? MAX_SPEED : nextDx;
-                b.x = 21;
+                hit = true; paddleY = room.p1.y; isLeftPaddle = true;
+                b.x = 21; // めり込み防止
             }
         }
-        
-        // 右パドル衝突
+        // 右パドル判定
         if (room.p2 && b.x >= 570 && b.x <= 580 && b.dx > 0) {
             if (b.y >= room.p2.y - 10 && b.y <= room.p2.y + 80) {
-                let nextDx = Math.abs(b.dx) * 1.05;
-                b.dx = nextDx > MAX_SPEED ? -MAX_SPEED : -nextDx;
-                b.x = 569;
+                hit = true; paddleY = room.p2.y; isLeftPaddle = false;
+                b.x = 569; // めり込み防止
             }
+        }
+
+        // 跳ね返り処理（スピード可変 5 → 10 ＆ 10%で明後日の方向）
+        if (hit) {
+            let currentSpeed = Math.sqrt(b.dx * b.dx + b.dy * b.dy);
+            let nextSpeed = Math.min(MAX_SPEED, currentSpeed + 0.6); // 当たるたびに+0.6ずつ加速
+
+            let angle = 0;
+            if (Math.random() < 0.10) {
+                // 【10%の確率】明後日の方向（60度〜75度の超急角度で大暴走）
+                let sign = Math.random() > 0.5 ? 1 : -1;
+                let crazyAngle = sign * (Math.PI / 3 + Math.random() * (Math.PI / 12));
+                angle = isLeftPaddle ? crazyAngle : Math.PI - crazyAngle;
+            } else {
+                // 【90%の通常反射】パドルの中心からの距離で打ち分ける（平坦化を防止！）
+                let relativeY = (b.y + 5) - (paddleY + 40); // パドル中心からのズレ
+                let normalizedHit = Math.max(-1, Math.min(1, relativeY / 40)); 
+                let bounceAngle = normalizedHit * (Math.PI / 4); // 最大45度の角度をつける
+                angle = isLeftPaddle ? bounceAngle : Math.PI - bounceAngle;
+            }
+
+            b.dx = Math.cos(angle) * nextSpeed;
+            b.dy = Math.sin(angle) * nextSpeed;
         }
 
         if (b.x < -10) { room.score.p2++; b.active = false; }
