@@ -9,14 +9,15 @@ const io = new Server(server, {
     transports: ['websocket', 'polling']
 });
 
-const rooms = {}; // 全ての部屋データを管理するオブジェクト
+const rooms = {};
+const MAX_SPEED = 12; // ボールの最高速度制限
 
 io.on('connection', (socket) => {
     let currentRoom = null;
 
     // 1. 部屋を作る
     socket.on('createRoom', (data) => {
-        const code = Math.floor(1000 + Math.random() * 9000).toString(); // 4桁のコード
+        const code = Math.floor(1000 + Math.random() * 9000).toString();
         rooms[code] = {
             code: code,
             maxScore: parseInt(data.maxScore) || 5,
@@ -33,7 +34,7 @@ io.on('connection', (socket) => {
         socket.emit('roomCreated', { code: code });
     });
 
-    // 2. 部屋に入る（ここで存在チェックを行う）
+    // 2. 部屋に入る
     socket.on('joinRoom', (data) => {
         const code = data.code;
         const room = rooms[code];
@@ -51,13 +52,11 @@ io.on('connection', (socket) => {
         currentRoom = code;
         socket.join(code);
 
-        // 参加者に成功を通知
         socket.emit('roomJoined', { code: code });
-        // 部屋の全員にメンバーが揃ったことを通知
         io.to(code).emit('roomReady', { p1Name: room.p1.name, p2Name: room.p2.name });
     });
 
-    // 3. 準備完了ボタンの処理
+    // 3. 準備完了ボタンの処理（最初のスタート＆ラウンド移行時共通）
     socket.on('playerReady', () => {
         const room = rooms[currentRoom];
         if (!room) return;
@@ -65,13 +64,11 @@ io.on('connection', (socket) => {
         if (socket.id === room.p1.id) room.p1.ready = true;
         if (room.p2 && socket.id === room.p2.id) room.p2.ready = true;
 
-        // 両者準備完了でゲーム開始
         if (room.p1.ready && room.p2 && room.p2.ready && room.gameState !== 'PLAYING') {
             room.gameState = 'PLAYING';
-            initRoomBalls(room);
+            initRoomBalls(room); // ここでボールをセット
             io.to(currentRoom).emit('gameStarted');
             
-            // サーバー側ゲームループ開始 (60fps)
             if (!room.intervalId) {
                 room.intervalId = setInterval(() => updateRoomGame(room), 1000 / 60);
             }
@@ -86,7 +83,6 @@ io.on('connection', (socket) => {
         if (room.p2 && socket.id === room.p2.id) room.p2.y = data.y;
     });
 
-    // 5. 切断・退出処理
     const handleLeave = () => {
         const room = rooms[currentRoom];
         if (room) {
@@ -99,7 +95,6 @@ io.on('connection', (socket) => {
     socket.on('disconnect', handleLeave);
 });
 
-// オンライン用のボール初期化
 function initRoomBalls(room) {
     room.balls = [];
     const baseAngle = Math.PI;
@@ -111,7 +106,7 @@ function initRoomBalls(room) {
     }
 }
 
-// サーバー側での物理演算ループ
+// サーバー側物理演算
 function updateRoomGame(room) {
     if (room.gameState !== 'PLAYING') return;
 
@@ -122,22 +117,30 @@ function updateRoomGame(room) {
 
         b.x += b.dx; b.y += b.dy;
 
-        // 壁衝突
         if (b.y < 0 || b.y > 390) b.dy *= -1;
 
-        // パドル衝突 (P1:左, P2:右)
-        if (b.x < 20 && b.y > room.p1.y && b.y < room.p1.y + 80) b.dx = Math.abs(b.dx) * 1.05;
-        if (room.p2 && b.x > 570 && b.y > room.p2.y && b.y < room.p2.y + 80) b.dx = -Math.abs(b.dx) * 1.05;
+        // パドル衝突時の加速に上限（MAX_SPEED）を設定
+        if (b.x < 20 && b.y > room.p1.y && b.y < room.p1.y + 80) {
+            let nextDx = Math.abs(b.dx) * 1.05;
+            b.dx = nextDx > MAX_SPEED ? MAX_SPEED : nextDx;
+        }
+        if (room.p2 && b.x > 570 && b.y > room.p2.y && b.y < room.p2.y + 80) {
+            let nextDx = Math.abs(b.dx) * 1.05;
+            b.dx = nextDx > MAX_SPEED ? -MAX_SPEED : -nextDx;
+        }
 
-        // ゴール判定
         if (b.x < -10) { room.score.p2++; b.active = false; }
         if (b.x > 610) { room.score.p1++; b.active = false; }
     });
 
-    // 全てのボールが消えたら次のラウンドか終了判定
     if (activeCount === 0) {
         if (room.score.p1 < room.maxScore && room.score.p2 < room.maxScore) {
-            initRoomBalls(room); // 次のラウンドへ
+            // 次のラウンドの準備状態へ（プレイヤーの準備フラグをリセットして同期）
+            room.gameState = 'READY';
+            room.p1.ready = false;
+            if (room.p2) room.p2.ready = false;
+            io.to(room.code).emit('roundCleared', { score: room.score });
+            return; 
         } else {
             room.gameState = 'STOPPED';
             clearInterval(room.intervalId);
@@ -147,7 +150,6 @@ function updateRoomGame(room) {
         }
     }
 
-    // 両プレイヤーに最新状態を送信
     io.to(room.code).emit('gameState', {
         balls: room.balls,
         score: room.score,
